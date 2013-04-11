@@ -234,7 +234,8 @@ namespace wifimon
 
 	WifiMon::WifiMon( ) :
 		nlh( NULL ),
-		nl80211_id( -1 )
+		nl80211_id( -1 ),
+		poll_interval( 5.0 )
 	{
 		nlh = nl_socket_alloc( );
 		if( !nlh )
@@ -269,7 +270,7 @@ namespace wifimon
 
 		XmlRpc::XmlRpcValue xml_dev_list;
 		xml_dev_list.setSize( 0 ); // This makes it TypeArray
-		nh_priv.param( "poll_interval", poll_interval, 5 );
+		nh_priv.param( "poll_interval", poll_interval, 5.0 );
 		nh_priv.param( "dev_list", xml_dev_list, xml_dev_list );
 		ROS_ASSERT( xml_dev_list.getType() == XmlRpc::XmlRpcValue::TypeArray );
 		signed long long int dev_idx;

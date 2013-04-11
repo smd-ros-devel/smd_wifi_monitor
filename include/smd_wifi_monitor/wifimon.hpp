@@ -85,7 +85,7 @@ namespace wifimon
 		int nl80211_id;
 		std::vector<signed long long int> dev_ids;
 		std::vector<int> phy_ids;
-		int poll_interval;
+		double poll_interval;
 
 		ros::NodeHandle nh;
 		ros::NodeHandle nh_priv;
