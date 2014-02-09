@@ -46,6 +46,7 @@ namespace wifimon
 		struct sta_info
 		{
 			// From GET_STATION
+			unsigned int last_seen;
 			unsigned int rx_pkts;
 			unsigned int tx_pkts;
 			unsigned int rx_bytes;

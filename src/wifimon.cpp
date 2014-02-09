@@ -99,6 +99,8 @@ namespace wifimon
 		else
 			return NL_SKIP;
 
+		if( sinfo[NL80211_STA_INFO_INACTIVE_TIME] )
+			info->stations[bssid].last_seen = nla_get_u32(sinfo[NL80211_STA_INFO_INACTIVE_TIME]);
 		if( sinfo[NL80211_STA_INFO_RX_BYTES] )
 			info->stations[bssid].rx_bytes = nla_get_u32(sinfo[NL80211_STA_INFO_RX_BYTES]);
 		if( sinfo[NL80211_STA_INFO_TX_BYTES] )
@@ -341,6 +343,7 @@ namespace wifimon
 			{
 				dev.stations.resize( dev.stations.size( ) + 1 );
 				dev.stations.back( ).bssid = mac2str( (unsigned char *)&it->first );
+				dev.stations.back( ).last_seen = it->second.last_seen;
 				dev.stations.back( ).signal = it->second.signal;
 				dev.stations.back( ).bitrate = it->second.bitrate;
 				dev.stations.back( ).rx_pkts = it->second.rx_pkts;
