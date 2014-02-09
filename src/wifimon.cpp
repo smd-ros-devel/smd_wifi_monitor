@@ -8,6 +8,7 @@
 #include <netlink/genl/genl.h>
 #include <netlink/genl/ctrl.h>
 #include <linux/nl80211.h>
+#include <sys/ioctl.h>
 
 #include <fstream>
 
@@ -82,6 +83,7 @@ namespace wifimon
 		bss_policy[NL80211_STA_BSS_PARAM_SHORT_SLOT_TIME].type = NLA_FLAG;
 		bss_policy[NL80211_STA_BSS_PARAM_DTIM_PERIOD].type = NLA_U8;
 		bss_policy[NL80211_STA_BSS_PARAM_BEACON_INTERVAL].type = NLA_U16;
+		uint64_t bssid = 0;
 
 		nla_parse( tb, NL80211_ATTR_MAX, genlmsg_attrdata( gnlh, 0 ), genlmsg_attrlen( gnlh, 0 ), NULL );
 
@@ -92,17 +94,22 @@ namespace wifimon
 			return NL_SKIP;
 		}
 
+		if( tb[NL80211_ATTR_MAC] )
+			memcpy( &bssid, nla_data( tb[NL80211_ATTR_MAC] ), 6 );
+		else
+			return NL_SKIP;
+
 		if( sinfo[NL80211_STA_INFO_RX_BYTES] )
-			info->rx_bytes = nla_get_u32(sinfo[NL80211_STA_INFO_RX_BYTES]);
+			info->stations[bssid].rx_bytes = nla_get_u32(sinfo[NL80211_STA_INFO_RX_BYTES]);
 		if( sinfo[NL80211_STA_INFO_TX_BYTES] )
-			info->tx_bytes = nla_get_u32(sinfo[NL80211_STA_INFO_TX_BYTES]);
+			info->stations[bssid].tx_bytes = nla_get_u32(sinfo[NL80211_STA_INFO_TX_BYTES]);
 		if( sinfo[NL80211_STA_INFO_RX_PACKETS] )
-			info->rx_pkts = nla_get_u32(sinfo[NL80211_STA_INFO_RX_PACKETS]);
+			info->stations[bssid].rx_pkts = nla_get_u32(sinfo[NL80211_STA_INFO_RX_PACKETS]);
 		if( sinfo[NL80211_STA_INFO_TX_PACKETS] )
-			info->tx_pkts = nla_get_u32(sinfo[NL80211_STA_INFO_TX_PACKETS]);
+			info->stations[bssid].tx_pkts = nla_get_u32(sinfo[NL80211_STA_INFO_TX_PACKETS]);
 
 		if( sinfo[NL80211_STA_INFO_SIGNAL] )
-			info->signal = (int8_t)nla_get_u8( sinfo[NL80211_STA_INFO_SIGNAL] );
+			info->stations[bssid].signal = (int8_t)nla_get_u8( sinfo[NL80211_STA_INFO_SIGNAL] );
 
 		if( sinfo[NL80211_STA_INFO_TX_BITRATE] )
 		{
@@ -110,9 +117,9 @@ namespace wifimon
 				sinfo[NL80211_STA_INFO_TX_BITRATE], rate_policy ) )
 			{
 				if( rinfo[NL80211_RATE_INFO_BITRATE32] )
-					info->bitrate = nla_get_u32( rinfo[NL80211_RATE_INFO_BITRATE32] ) / 10.0;
+					info->stations[bssid].bitrate = nla_get_u32( rinfo[NL80211_RATE_INFO_BITRATE32] ) / 10.0;
 				else if( rinfo[NL80211_RATE_INFO_BITRATE] )
-					info->bitrate = nla_get_u16( rinfo[NL80211_RATE_INFO_BITRATE] ) / 10.0;
+					info->stations[bssid].bitrate = nla_get_u16( rinfo[NL80211_RATE_INFO_BITRATE] ) / 10.0;
 			}
 		}
 
@@ -147,8 +154,12 @@ namespace wifimon
 			return NL_SKIP;
 		}
 
-		if( bss[NL80211_BSS_BSSID] )
-			memcpy( info->bssid, nla_data( bss[NL80211_BSS_BSSID] ), 6 );
+		if( bss[NL80211_BSS_BSSID] && !info->stations.size( ) )
+		{
+			uint64_t bssid = 0;
+			memcpy( (unsigned char *)&bssid, nla_data( bss[NL80211_BSS_BSSID] ), 6 );
+			info->stations[bssid];
+		}
 		else
 			return NL_SKIP;
 
@@ -195,10 +206,6 @@ namespace wifimon
 			info->ifname = nla_get_string( tb_msg[NL80211_ATTR_IFNAME] );
 		else
 			info->valid = false;
-		if( tb_msg[NL80211_ATTR_MAC] )
-			memcpy( info->mac_addr, nla_data( tb_msg[NL80211_ATTR_MAC] ), 6 );
-		else
-			info->valid = false;
 		if( tb_msg[NL80211_ATTR_IFTYPE] )
 			info->iftype = (enum nl80211_iftype)nla_get_u32( tb_msg[NL80211_ATTR_IFTYPE] );
 		else
@@ -234,6 +241,7 @@ namespace wifimon
 
 	WifiMon::WifiMon( ) :
 		nlh( NULL ),
+		ioctl_sock( -1 ),
 		nl80211_id( -1 ),
 		poll_interval( 5.0 )
 	{
@@ -256,10 +264,19 @@ namespace wifimon
 			NODELET_FATAL( "nl80211 not found." );
 			ros::shutdown( );
 		}
+
+		ioctl_sock = socket( PF_INET, SOCK_DGRAM, 0 );
+		if( ioctl_sock < 0 )
+		{
+			NODELET_FATAL( "Failed to initialize ioctl sock" );
+			ros::shutdown( );
+		}
 	}
 
 	WifiMon::~WifiMon( )
 	{
+		if( ioctl_sock >= 0 )
+			close( ioctl_sock );
 		nl_socket_free( nlh );
 	}
 
@@ -286,11 +303,11 @@ namespace wifimon
 				else
 				{
 					dev_ids.push_back( dev_idx );
-					NODELET_DEBUG( "Found device %s at id %d.", dev_name.c_str( ), dev_idx );
+					NODELET_DEBUG( "Found device %s at id %lld.", dev_name.c_str( ), dev_idx );
 				}
 			}
 		}
-		NODELET_DEBUG( "Device detection complete; found %d devices.", dev_ids.size( ) );
+		NODELET_DEBUG( "Device detection complete; found %u devices.", dev_ids.size( ) );
 
 		wifi_info_pub = nh.advertise<smd_wifi_monitor::WifiStatus>( "wifi_status", 1, false );
 		PollCB( ros::TimerEvent( ) );
@@ -304,27 +321,33 @@ namespace wifimon
 		msg->header.stamp = ros::Time::now( );
 		for( unsigned int i = 0; i < dev_ids.size( ); i++ )
 		{
-			ROS_DEBUG( "Polling %d.", dev_ids[i] );
+			ROS_DEBUG( "Polling %lld.", dev_ids[i] );
 			struct iface_info info;
-			if( get_info( dev_ids[i], &info ) )
+			int ret = get_info( dev_ids[i], &info );
+			if( ret )
 			{
-				ROS_WARN( "Failed to get info for netdev %d.", dev_ids[i] );
+				ROS_WARN( "Failed to get info for netdev %lld (%d).", dev_ids[i], ret );
 				continue;
 			}
 			smd_wifi_monitor::WifiDeviceInfo dev;
 			dev.name = info.ifname;
 			dev.mac = mac2str( info.mac_addr );
 			dev.mode = iftype_name( info.iftype );
-			dev.station.essid = info.essid;
-			dev.station.bssid = mac2str( info.bssid );
-			dev.station.frequency = info.freq;
-			dev.station.state = bss_stat_name( info.bss_stat );
-			dev.station.signal = info.signal;
-			dev.station.bitrate = info.bitrate;
-			dev.station.rx_pkts = info.rx_pkts;
-			dev.station.tx_pkts = info.tx_pkts;
-			dev.station.rx_bytes = info.rx_bytes;
-			dev.station.tx_bytes = info.tx_bytes;
+			dev.essid = info.essid;
+			dev.state = bss_stat_name( info.bss_stat );
+			dev.frequency = info.freq;
+			for( std::map<uint64_t, struct sta_info>::iterator it = info.stations.begin( );
+				it != info.stations.end( ); it++ )
+			{
+				dev.stations.resize( dev.stations.size( ) + 1 );
+				dev.stations.back( ).bssid = mac2str( (unsigned char *)&it->first );
+				dev.stations.back( ).signal = it->second.signal;
+				dev.stations.back( ).bitrate = it->second.bitrate;
+				dev.stations.back( ).rx_pkts = it->second.rx_pkts;
+				dev.stations.back( ).tx_pkts = it->second.tx_pkts;
+				dev.stations.back( ).rx_bytes = it->second.rx_bytes;
+				dev.stations.back( ).tx_bytes = it->second.tx_bytes;
+			}
 			msg->devices.push_back( dev );
 		}
 		wifi_info_pub.publish( msg );
@@ -335,6 +358,7 @@ namespace wifimon
 		struct nl_msg *msg = NULL;
 		struct nl_cb *cb;
 		struct nl_cb *s_cb;
+		struct ifreq ifr;
 		int ret = 0;
 
 		msg = nlmsg_alloc( );
@@ -355,15 +379,9 @@ namespace wifimon
 		memset( &info->mac_addr, 0, 8 );
 		info->iftype = (enum nl80211_iftype)((int)(NL80211_IFTYPE_MAX) + 1);
 		info->wiphy = -1;
-		memset( &info->bssid, 0, 8 );
 		info->bss_stat = (enum nl80211_bss_status)4;
+		info->essid = "unknown";
 		info->freq = 0;
-		info->rx_pkts = 0;
-		info->tx_pkts = 0;
-		info->rx_bytes = 0;
-		info->tx_bytes = 0;
-		info->signal = 0;
-		info->bitrate = 0.0;
 
 		/* GET_IFACE */
 		genlmsg_put( msg, 0, 0, nl80211_id, 0, 0, NL80211_CMD_GET_INTERFACE, 0 );
@@ -401,58 +419,89 @@ namespace wifimon
 			NODELET_FATAL( "Failed to allocate netlink message." );
 			ros::shutdown( );
 		}
-		/* GET_SCAN */
-		genlmsg_put( msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0 );
-
-		NLA_PUT_U32( msg, NL80211_ATTR_IFINDEX, dev_id );
-
-		// HANDLER
-		nl_cb_set( cb, NL_CB_VALID, NL_CB_CUSTOM, get_link_bss_handler, (void *)info );
-
-		nl_socket_set_cb( nlh, s_cb );
-
-		ret = nl_send_auto_complete( nlh, msg );
-		if( ret < 0 )
-			goto out;
-
-		ret = 1;
-
-		nl_cb_err( cb, NL_CB_CUSTOM, error_handler, &ret );
-		nl_cb_set( cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &ret );
-		nl_cb_set( cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &ret );
-
-		while ( ret > 0 )
-			nl_recvmsgs( nlh, cb );
-
-		if( !info->valid )
+		/* GET HWADDR */
+		memset( &ifr, 0x0, sizeof( ifr ) );
+		strncpy( ifr.ifr_name, info->ifname.c_str( ), IFNAMSIZ );
+		if( ioctl( ioctl_sock, SIOCGIFHWADDR, &ifr ) )
 		{
+			NODELET_ERROR( "Failed to fetch HWADDR for %s", info->ifname.c_str( ) );
 			ret = 1;
 			goto out;
 		}
-		/* DONE WITH GET_SCAN */
-		if( info->bss_stat != NL80211_BSS_STATUS_ASSOCIATED )
-			goto out;
-		nlmsg_free( msg );
-		msg = nlmsg_alloc( );
-		if( !msg )
+		else if( ifr.ifr_hwaddr.sa_family != 1 )
 		{
-			NODELET_FATAL( "Failed to allocate netlink message." );
-			ros::shutdown( );
+			NODELET_ERROR( "Unsupported HWADDR family on %s", info->ifname.c_str( ) );
+			ret = 1;
+			goto out;
+		}
+		memcpy( info->mac_addr, ifr.ifr_hwaddr.sa_data, 6 );
+		/* DONE WITH GET HWADDR*/
+		/* GET_SCAN */
+		if( info->iftype != NL80211_IFTYPE_AP )
+		{
+			genlmsg_put( msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0 );
+
+			NLA_PUT_U32( msg, NL80211_ATTR_IFINDEX, dev_id );
+
+			// HANDLER
+			nl_cb_set( cb, NL_CB_VALID, NL_CB_CUSTOM, get_link_bss_handler, (void *)info );
+
+			nl_socket_set_cb( nlh, s_cb );
+
+			ret = nl_send_auto_complete( nlh, msg );
+			if( ret < 0 )
+			{
+				NODELET_WARN( "Could not complete scan request" );
+				goto out;
+			}
+
+			ret = 1;
+
+			nl_cb_err( cb, NL_CB_CUSTOM, error_handler, &ret );
+			nl_cb_set( cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &ret );
+			nl_cb_set( cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &ret );
+
+			while ( ret > 0 )
+				nl_recvmsgs( nlh, cb );
+
+			if( !info->valid )
+			{
+				NODELET_WARN( "Got invalid info from NL80211" );
+				ret = 1;
+				goto out;
+			}
+			/* DONE WITH GET_SCAN */
+			if( info->bss_stat != NL80211_BSS_STATUS_ASSOCIATED )
+			{
+				NODELET_WARN( "BSS Status is not ASSOC: %d", info->bss_stat );
+				goto out;
+			}
+			nlmsg_free( msg );
+			msg = nlmsg_alloc( );
+			if( !msg )
+			{
+				NODELET_FATAL( "Failed to allocate netlink message." );
+				ros::shutdown( );
+			}
 		}
 		/* GET_STATION */
-		genlmsg_put( msg, 0, 0, nl80211_id, 0, 0, NL80211_CMD_GET_STATION, 0 );
+		genlmsg_put( msg, 0, 0, nl80211_id, 0, info->iftype == NL80211_IFTYPE_AP ? NLM_F_DUMP : 0, NL80211_CMD_GET_STATION, 0 );
 
 		NLA_PUT_U32( msg, NL80211_ATTR_IFINDEX, dev_id );
 
 		// HANDLER
-		NLA_PUT( msg, NL80211_ATTR_MAC, 6, info->bssid );
+		if( info->stations.size( ) )
+			NLA_PUT( msg, NL80211_ATTR_MAC, 6, &info->stations.begin( )->first );
 		nl_cb_set( cb, NL_CB_VALID, NL_CB_CUSTOM, get_link_sta_handler, (void *)info );
 
 		nl_socket_set_cb( nlh, s_cb );
 
 		ret = nl_send_auto_complete( nlh, msg );
 		if( ret < 0 )
+		{
+			NODELET_WARN( "Could not complete station request" );
 			goto out;
+		}
 
 		ret = 1;
 
@@ -465,6 +514,7 @@ namespace wifimon
 
 		if( !info->valid )
 		{
+			NODELET_WARN( "Got invalid station info from NL80211" );
 			ret = 1;
 			goto out;
 		}

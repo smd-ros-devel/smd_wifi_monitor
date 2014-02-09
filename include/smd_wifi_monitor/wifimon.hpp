@@ -43,22 +43,8 @@ namespace wifimon
 		~WifiMon( );
 		virtual void onInit( );
 	private:
-		struct iface_info
+		struct sta_info
 		{
-			bool valid;
-
-			// From GET_INTERFACE
-			std::string ifname;
-			unsigned char mac_addr[8];
-			enum nl80211_iftype iftype;
-			int wiphy;
-
-			// From GET_SCAN
-			unsigned char bssid[8];
-			enum nl80211_bss_status bss_stat;
-			unsigned int freq;
-			std::string essid;
-
 			// From GET_STATION
 			unsigned int rx_pkts;
 			unsigned int tx_pkts;
@@ -66,6 +52,26 @@ namespace wifimon
 			unsigned int tx_bytes;
 			short int signal;
 			float bitrate;
+		};
+
+		struct iface_info
+		{
+			bool valid;
+
+			// From ioctl
+			unsigned char mac_addr[8];
+
+			// From GET_INTERFACE
+			std::string ifname;
+			enum nl80211_iftype iftype;
+			int wiphy;
+
+			// From GET_SCAN
+			enum nl80211_bss_status bss_stat;
+			unsigned int freq;
+			std::string essid;
+
+			std::map<uint64_t, struct sta_info> stations;
 		};
 
 		int get_info( signed long long int dev_id, struct iface_info *info );
@@ -82,6 +88,7 @@ namespace wifimon
 		void PollCB( const ros::TimerEvent &e );
 
 		struct nl_sock *nlh;
+		int ioctl_sock;
 		int nl80211_id;
 		std::vector<signed long long int> dev_ids;
 		std::vector<int> phy_ids;

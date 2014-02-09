@@ -1,7 +1,4 @@
-string essid
 string bssid
-uint32 frequency
-string state
 int8 signal
 float32 bitrate
 uint32 rx_pkts

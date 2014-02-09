@@ -1,4 +1,7 @@
 string name
 string mac
 string mode
-WifiStationInfo station
+string essid
+string state
+uint32 frequency
+WifiStationInfo[] stations
