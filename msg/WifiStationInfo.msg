@@ -1,4 +1,5 @@
 string bssid
+uint32 last_seen
 int8 signal
 float32 bitrate
 uint32 rx_pkts
